@@ -1,0 +1,60 @@
+[package]
+name = "reth-tdx"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT OR Apache-2.0"
+description = "Remote TDX TEE prover for taiko-mono / raiko2 (Shasta)."
+repository = "https://github.com/NethermindEth/reth-tdx"
+readme = "README.md"
+
+[[bin]]
+name = "reth-tdx"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Async runtime + HTTP server (versions track raiko2's workspace where types
+# cross the git-dep boundary; alloy-primitives MUST match to share Address/B256).
+tokio = { version = "^1.23", features = ["full"] }
+axum = { version = "0.8.7", features = ["macros"] }
+tower = { version = "0.5.2", features = ["full"] }
+tower-http = { version = "0.6", features = ["trace", "limit"] }
+
+# CLI + logging
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+
+# Ethereum + signing — alloy-primitives is the version we exchange Address /
+# B256 through with raiko2's protocol-shasta crate, so it must match raiko2's
+# workspace pin.
+alloy-primitives = { version = "1.5.0", default-features = false }
+alloy = { version = "1.5.0", features = ["full", "rpc-types-eth"] }
+secp256k1 = { version = "0.30", default-features = false, features = ["recovery", "global-context", "rand"] }
+rand = "0.8"
+
+# Misc
+anyhow = "1"
+async-trait = "0.1"
+dirs = "6.0"
+reqwest = { version = "0.12.26", features = ["json"] }
+url = "2"
+
+# raiko2 reuse — TDX-specific helpers (commitment build, aggregation hash, types).
+# Pinned to the feat/tdx-prover branch until raiko2 lands its TDX changes on main.
+# Pin to a commit before publishing.
+raiko2-primitives = { git = "https://github.com/taikoxyz/raiko2", branch = "feat/tdx-prover" }
+raiko2-primitives-shasta = { git = "https://github.com/taikoxyz/raiko2", branch = "feat/tdx-prover" }
+raiko2-protocol-shasta = { git = "https://github.com/taikoxyz/raiko2", branch = "feat/tdx-prover" }
+
+[dev-dependencies]
+httpmock = "0.7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
