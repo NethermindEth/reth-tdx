@@ -109,6 +109,7 @@ pub async fn sign_aggregation(
     .context("TDX aggregation proof generation failed")?;
 
     Ok(SignedProposal {
+        carry_data_vec: carry_vec,
         proof: format!("0x{}", hex::encode(proof)),
         quote: hex::encode(quote),
         input: format!("{aggregation_hash:?}"),

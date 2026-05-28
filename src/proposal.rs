@@ -30,6 +30,10 @@ pub struct SignedProposal {
     pub input: String,
     /// Bootstrap public key / instance address (hex).
     pub instance_address: String,
+    /// Exact `ProofCarryData` vector used to build the signed commitment.
+    /// Returned so callers can compute `hashCommitment(commitment)` for
+    /// on-chain `verifyProof` without re-fetching the local L2 state.
+    pub carry_data_vec: Vec<ProofCarryData>,
 }
 
 /// Validate the caller's chain_id / verifier against the prover's static config
@@ -139,6 +143,7 @@ pub async fn sign_proposal(
     .context("TDX proposal proof generation failed")?;
 
     Ok(SignedProposal {
+        carry_data_vec: vec![carry.clone()],
         proof: format!("0x{}", hex::encode(proof)),
         quote: hex::encode(quote),
         input: format!("{signing_hash:?}"),
@@ -153,6 +158,7 @@ impl From<SignedProposal> for ProofResult {
             quote: value.quote,
             input: value.input,
             instance_address: Some(value.instance_address),
+            proof_carry_data_vec: Some(value.carry_data_vec),
         }
     }
 }

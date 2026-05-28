@@ -14,7 +14,7 @@
 //! state from the caller.
 
 use alloy_primitives::{Address, B256};
-use raiko2_protocol_shasta::shasta::ShastaTransitionInput;
+use raiko2_protocol_shasta::shasta::{ProofCarryData, ShastaTransitionInput};
 use serde::{Deserialize, Serialize};
 
 /// Request schema for a single Shasta proposal proof. Increment the trailing
@@ -134,6 +134,13 @@ pub struct ProofResult {
     /// Bootstrap public key / instance address (echoed for caller convenience).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_address: Option<String>,
+    /// The exact `ProofCarryData` vector reth-tdx used to build the Shasta
+    /// commitment whose hash was signed. Callers need this to compute
+    /// `_commitmentHash = hashCommitment(commitment)` for on-chain
+    /// `verifyProof`. Length 1 for proposal proofs, N for aggregation
+    /// (one entry per sub-proof in original order).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof_carry_data_vec: Option<Vec<ProofCarryData>>,
 }
 
 /// Error payload.
