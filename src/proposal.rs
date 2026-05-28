@@ -123,15 +123,12 @@ pub async fn sign_proposal(
 
     let carry = proposal_carry_data_from_header(&payload, &header);
 
-    let commitment = build_shasta_commitment_from_proof_carry_data_vec(&[carry.clone()])
-        .ok_or_else(|| anyhow!("failed to build Shasta commitment from carry data"))?;
+    let commitment =
+        build_shasta_commitment_from_proof_carry_data_vec(std::slice::from_ref(&carry))
+            .ok_or_else(|| anyhow!("failed to build Shasta commitment from carry data"))?;
 
-    let signing_hash = shasta_aggregation_output(
-        &commitment,
-        carry.chain_id,
-        carry.verifier,
-        tdx_instance,
-    );
+    let signing_hash =
+        shasta_aggregation_output(&commitment, carry.chain_id, carry.verifier, tdx_instance);
 
     let ProveData { proof, quote } = prove(
         &config.tdxs_socket,

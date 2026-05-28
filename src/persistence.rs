@@ -37,7 +37,8 @@ pub struct BootstrapData {
     pub metadata: serde_json::Value,
 }
 
-/// Resolve the on-disk reth-tdx directory, creating it if necessary.
+/// Resolve the on-disk reth-tdx directory without creating it. Use for
+/// read-only operations.
 ///
 /// `home_override` (from `--home` / `RETH_TDX_HOME`) takes precedence over
 /// `$HOME` so the directory is deterministic when the binary runs as a
@@ -45,14 +46,24 @@ pub struct BootstrapData {
 ///
 /// # Errors
 ///
-/// Returns an error if the home directory cannot be determined or the directory
-/// cannot be created.
+/// Returns an error if the home directory cannot be determined.
 pub fn config_dir(home_override: Option<&str>) -> Result<PathBuf> {
     let home = match home_override {
         Some(path) => PathBuf::from(path),
         None => dirs::home_dir().ok_or_else(|| anyhow!("Failed to get home directory"))?,
     };
-    let dir = home.join(".config").join("reth-tdx");
+    Ok(home.join(".config").join("reth-tdx"))
+}
+
+/// Resolve the on-disk reth-tdx directory, creating it (and any missing
+/// parents) if necessary. Use for write paths.
+///
+/// # Errors
+///
+/// Returns an error if the home directory cannot be determined or the directory
+/// cannot be created.
+fn config_dir_for_write(home_override: Option<&str>) -> Result<PathBuf> {
+    let dir = config_dir(home_override)?;
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -99,7 +110,7 @@ pub fn generate_private_key(home_override: Option<&str>) -> Result<secp256k1::Se
 /// The file is created with 0600 from the start so the key bytes are never on
 /// disk under the default umask before being narrowed.
 fn save_private_key(home_override: Option<&str>, key: &secp256k1::SecretKey) -> Result<()> {
-    let dir = config_dir(home_override)?;
+    let dir = config_dir_for_write(home_override)?;
     let secrets_dir = dir.join("secrets");
     fs::create_dir_all(&secrets_dir)?;
 
@@ -152,11 +163,13 @@ pub fn read_bootstrap(home_override: Option<&str>) -> Result<BootstrapData> {
     serde_json::from_str(&raw).map_err(|e| anyhow!("Failed to parse bootstrap data: {e}"))
 }
 
-/// Write the bootstrap record to disk.
+/// Write the bootstrap record to disk atomically (write-to-temp + rename) so a
+/// crash mid-write cannot leave a half-written `bootstrap.json` that fails to
+/// parse on the next start.
 ///
 /// # Errors
 ///
-/// Returns an error if the file cannot be written.
+/// Returns an error if the file cannot be written or renamed into place.
 pub fn write_bootstrap(
     home_override: Option<&str>,
     issuer_type: &str,
@@ -165,8 +178,9 @@ pub fn write_bootstrap(
     nonce: &[u8],
     metadata: serde_json::Value,
 ) -> Result<()> {
-    let dir = config_dir(home_override)?;
+    let dir = config_dir_for_write(home_override)?;
     let path = dir.join("bootstrap.json");
+    let tmp = dir.join("bootstrap.json.tmp");
 
     let data = BootstrapData {
         issuer_type: issuer_type.to_string(),
@@ -175,7 +189,10 @@ pub fn write_bootstrap(
         nonce: hex::encode(nonce),
         metadata,
     };
-    fs::write(&path, serde_json::to_string_pretty(&data)?)?;
+    let serialized = serde_json::to_string_pretty(&data)?;
+    fs::write(&tmp, serialized).with_context(|| format!("failed to write {}", tmp.display()))?;
+    fs::rename(&tmp, &path)
+        .with_context(|| format!("failed to rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
 }
 
@@ -198,5 +215,152 @@ pub fn validate_issuer(issuer: &str) -> Result<()> {
             "Unsupported tdxs issuer '{issuer}' — expected one of {:?}",
             SUPPORTED_ISSUER_TYPES
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn sample_address() -> Address {
+        Address::repeat_byte(0xab)
+    }
+
+    #[test]
+    fn validate_issuer_accepts_known_types() {
+        for issuer in SUPPORTED_ISSUER_TYPES {
+            validate_issuer(issuer).unwrap_or_else(|_| panic!("should accept {issuer}"));
+        }
+    }
+
+    #[test]
+    fn validate_issuer_rejects_unknown() {
+        let err = validate_issuer("aws-nitro").expect_err("should reject unknown issuer");
+        assert!(err.to_string().contains("aws-nitro"));
+    }
+
+    #[test]
+    fn config_dir_does_not_create() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_string_lossy().to_string();
+        let dir = config_dir(Some(&home)).unwrap();
+        assert!(
+            !dir.exists(),
+            "read-only config_dir should not create the directory"
+        );
+    }
+
+    #[test]
+    fn write_bootstrap_round_trips_via_read_bootstrap() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_string_lossy().to_string();
+        let address = sample_address();
+        let metadata = serde_json::json!({"pcr0": "deadbeef"});
+
+        write_bootstrap(
+            Some(&home),
+            "tdx",
+            &[0x01, 0x02, 0x03],
+            &address,
+            &[0xaa; 32],
+            metadata.clone(),
+        )
+        .unwrap();
+
+        let data = read_bootstrap(Some(&home)).unwrap();
+        assert_eq!(data.issuer_type, "tdx");
+        assert_eq!(data.public_key, address.to_string());
+        assert_eq!(data.quote, "010203");
+        assert_eq!(data.nonce, hex::encode([0xaa; 32]));
+        assert_eq!(data.metadata, metadata);
+    }
+
+    #[test]
+    fn write_bootstrap_is_atomic_no_tmp_remains() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_string_lossy().to_string();
+        write_bootstrap(
+            Some(&home),
+            "tdx",
+            &[0u8; 4],
+            &sample_address(),
+            &[0u8; 32],
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let tmp_path = tmp
+            .path()
+            .join(".config")
+            .join("reth-tdx")
+            .join("bootstrap.json.tmp");
+        assert!(
+            !tmp_path.exists(),
+            "atomic write must leave no .tmp behind after rename"
+        );
+    }
+
+    #[test]
+    fn bootstrap_record_exists_detects_only_bootstrap_json() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_string_lossy().to_string();
+        assert!(!bootstrap_record_exists(Some(&home)).unwrap());
+        write_bootstrap(
+            Some(&home),
+            "tdx",
+            &[0u8; 4],
+            &sample_address(),
+            &[0u8; 32],
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert!(bootstrap_record_exists(Some(&home)).unwrap());
+        // priv.key absent → full bootstrap NOT considered complete.
+        assert!(!bootstrap_exists(Some(&home)).unwrap());
+    }
+
+    #[test]
+    fn generate_private_key_and_round_trip_load() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_string_lossy().to_string();
+        let key = generate_private_key(Some(&home)).unwrap();
+        let loaded = load_private_key(Some(&home)).unwrap();
+        assert_eq!(key.secret_bytes(), loaded.secret_bytes());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_key_file_has_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_string_lossy().to_string();
+        generate_private_key(Some(&home)).unwrap();
+        let key_path = tmp
+            .path()
+            .join(".config")
+            .join("reth-tdx")
+            .join("secrets")
+            .join("priv.key");
+        let mode = fs::metadata(&key_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "priv.key must be created with 0600");
+    }
+
+    #[test]
+    fn bootstrap_exists_requires_both_files() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().to_string_lossy().to_string();
+        // Generate only the private key → bootstrap is incomplete.
+        generate_private_key(Some(&home)).unwrap();
+        assert!(!bootstrap_exists(Some(&home)).unwrap());
+        write_bootstrap(
+            Some(&home),
+            "tdx",
+            &[0u8; 4],
+            &sample_address(),
+            &[0u8; 32],
+            serde_json::json!({}),
+        )
+        .unwrap();
+        assert!(bootstrap_exists(Some(&home)).unwrap());
     }
 }

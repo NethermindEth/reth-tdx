@@ -9,6 +9,12 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::time::Duration;
+
+/// Per-direction socket timeout. Generous enough to accommodate a slow TDX
+/// quote (hardware path can take several seconds) but small enough that a
+/// wedged daemon cannot occupy a `spawn_blocking` thread indefinitely.
+const TDXS_SOCKET_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Generic JSON-RPC-like request envelope.
 #[derive(Debug, Serialize)]
@@ -147,6 +153,12 @@ pub async fn metadata(socket_path: &str) -> Result<MetadataResponseData> {
 fn send_request_blocking(socket_path: &str, request_json: &str) -> Result<Vec<u8>> {
     let mut stream = UnixStream::connect(socket_path)
         .with_context(|| format!("Failed to connect to attestation service at {socket_path}"))?;
+    stream
+        .set_read_timeout(Some(TDXS_SOCKET_TIMEOUT))
+        .context("Failed to set read timeout on attestation socket")?;
+    stream
+        .set_write_timeout(Some(TDXS_SOCKET_TIMEOUT))
+        .context("Failed to set write timeout on attestation socket")?;
 
     stream
         .write_all(request_json.as_bytes())

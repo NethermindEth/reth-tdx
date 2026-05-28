@@ -2,9 +2,9 @@
 //!
 //! # Why a new schema (not raiko2-shasta-request-v1)
 //!
-//! gaiko2's protocol (`raiko2-shasta-request-v1`) carries the full L2 block bodies
-//! and execution witnesses because gaiko2 re-executes the blocks inside Gramine-SGX
-//! to produce its attestation.
+//! raiko2's protocol (`raiko2-shasta-request-v1`) carries the full L2 block bodies
+//! and execution witnesses because raiko2's other backends re-execute the blocks to
+//! produce their attestation.
 //!
 //! reth-tdx is co-located with a trusted Nethermind L2 client inside the TDX VM
 //! and fetches blocks itself over the local JSON-RPC. The caller therefore sends

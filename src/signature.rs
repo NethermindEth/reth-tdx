@@ -1,14 +1,17 @@
 //! ECDSA signature utilities for the TDX bootstrap key.
+//!
+//! Uses the `secp256k1` crate's pre-allocated global context (enabled by the
+//! `global-context` feature in `Cargo.toml`) so we don't reinit a context
+//! table per call — the cost is meaningful under concurrent proof requests.
 
 use alloy_primitives::{Address, B256, keccak256};
 use anyhow::Result;
-use secp256k1::{Message, PublicKey, Secp256k1, SecretKey, ecdsa::RecoverableSignature};
+use secp256k1::{Message, PublicKey, SECP256K1, SecretKey, ecdsa::RecoverableSignature};
 
 /// Derive an Ethereum address from a secp256k1 private key.
 #[must_use]
 pub fn address_from_private_key(private_key: &SecretKey) -> Address {
-    let secp = Secp256k1::new();
-    let public_key = PublicKey::from_secret_key(&secp, private_key);
+    let public_key = PublicKey::from_secret_key(SECP256K1, private_key);
     public_key_to_address(&public_key)
 }
 
@@ -27,9 +30,8 @@ fn public_key_to_address(public_key: &PublicKey) -> Address {
 ///
 /// Returns an error if the message digest is invalid.
 pub fn sign_message(private_key: &SecretKey, hash: &B256) -> Result<[u8; 65]> {
-    let secp = Secp256k1::new();
     let message = Message::from_digest_slice(hash.as_slice())?;
-    let sig = secp.sign_ecdsa_recoverable(&message, private_key);
+    let sig = SECP256K1.sign_ecdsa_recoverable(&message, private_key);
 
     let (recovery_id, sig_bytes) = sig.serialize_compact();
     let mut signature = [0u8; 65];
@@ -50,9 +52,8 @@ pub fn recover_signer(sig: &[u8; 65], msg: &B256) -> Result<Address> {
     let recovery_id = secp256k1::ecdsa::RecoveryId::try_from(i32::from(sig[64]) - 27)?;
     let sig = RecoverableSignature::from_compact(&sig[..64], recovery_id)?;
 
-    let secp = Secp256k1::new();
     let message = Message::from_digest_slice(msg.as_slice())?;
-    let public_key = secp.recover_ecdsa(&message, &sig)?;
+    let public_key = SECP256K1.recover_ecdsa(&message, &sig)?;
 
     Ok(public_key_to_address(&public_key))
 }
@@ -63,8 +64,7 @@ mod tests {
 
     #[test]
     fn sign_and_recover_round_trip() {
-        let secp = Secp256k1::new();
-        let (secret_key, _) = secp.generate_keypair(&mut rand::thread_rng());
+        let (secret_key, _) = SECP256K1.generate_keypair(&mut rand::thread_rng());
         let expected_address = address_from_private_key(&secret_key);
         let hash = keccak256(b"test message");
 

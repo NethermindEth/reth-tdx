@@ -94,13 +94,11 @@ impl L2Client {
         // 1 second is plenty for localhost; on cold-start the node may still be
         // syncing so probe() is best-effort — callers decide what to do with
         // failures.
-        let block_number = tokio::time::timeout(
-            Duration::from_secs(5),
-            self.provider.get_block_number(),
-        )
-        .await
-        .context("local L2 eth_blockNumber timed out")?
-        .context("local L2 eth_blockNumber failed")?;
+        let block_number =
+            tokio::time::timeout(Duration::from_secs(5), self.provider.get_block_number())
+                .await
+                .context("local L2 eth_blockNumber timed out")?
+                .context("local L2 eth_blockNumber failed")?;
         Ok(block_number)
     }
 }

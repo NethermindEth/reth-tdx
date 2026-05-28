@@ -44,7 +44,14 @@ pub async fn sign_aggregation(
         return Err(anyhow!("aggregate request has no sub-proofs"));
     }
 
-    info!(count = sub_proofs.len(), "rebuilding aggregation carry data");
+    info!(
+        count = sub_proofs.len(),
+        "rebuilding aggregation carry data"
+    );
+
+    let private_key = persistence::load_private_key(config.home.as_deref())
+        .context("failed to load TDX bootstrap key")?;
+    let tdx_instance = address_from_private_key(&private_key);
 
     let mut carry_vec: Vec<ProofCarryData> = Vec::with_capacity(sub_proofs.len());
     let mut sub_proof_pairs: Vec<(Vec<u8>, B256)> = Vec::with_capacity(sub_proofs.len());
@@ -77,16 +84,40 @@ pub async fn sign_aggregation(
                 )
             })?;
 
-        carry_vec.push(proposal_carry_data_from_header(&sub.payload, &header));
+        let carry = proposal_carry_data_from_header(&sub.payload, &header);
+
+        // Cross-check the rebuilt carry against the original signing hash:
+        // a sub-proof's signing hash is shasta_aggregation_output over its
+        // single-element commitment, so if the locally re-fetched L2 block
+        // differs from the one the sub-proof was signed against (reorg, drift),
+        // the recomputed hash won't match sub.input. Catching this here avoids
+        // signing an aggregation over commitments the sub-proofs never covered.
+        let single_commitment =
+            build_shasta_commitment_from_proof_carry_data_vec(std::slice::from_ref(&carry))
+                .ok_or_else(|| {
+                    anyhow!("failed to build single-proof commitment for sub-proof {index}")
+                })?;
+        let expected_input = shasta_aggregation_output(
+            &single_commitment,
+            sub.payload.chain_id,
+            sub.payload.verifier,
+            tdx_instance,
+        );
+        if expected_input != sub.input {
+            return Err(anyhow!(
+                "sub-proof {index} rebuilt carry data hashes to {expected_input:?} \
+                 but original sub-proof signed over {:?}; the local L2 state may \
+                 have changed since the sub-proof was produced",
+                sub.input
+            ));
+        }
+
+        carry_vec.push(carry);
 
         let proof_bytes = hex::decode(sub.proof.trim_start_matches("0x"))
             .with_context(|| format!("sub-proof {index} proof bytes are not valid hex"))?;
         sub_proof_pairs.push((proof_bytes, sub.input));
     }
-
-    let private_key = persistence::load_private_key(config.home.as_deref())
-        .context("failed to load TDX bootstrap key")?;
-    let tdx_instance = address_from_private_key(&private_key);
 
     let commitment = build_shasta_commitment_from_proof_carry_data_vec(&carry_vec)
         .ok_or_else(|| anyhow!("failed to build aggregation commitment (chain not continuous)"))?;

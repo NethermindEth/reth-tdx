@@ -4,12 +4,8 @@ use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::{
-    Config, ServeOpts,
-    bootstrap as bootstrap_module,
-    l2_client::L2Client,
-    persistence,
-    protocol::BootstrapResponse,
-    server,
+    Config, ServeOpts, bootstrap as bootstrap_module, l2_client::L2Client, persistence,
+    protocol::BootstrapResponse, server,
 };
 
 /// Bootstrap the TDX prover key + attestation quote (idempotent), persist
@@ -44,10 +40,7 @@ pub async fn check(config: &Config) -> Result<()> {
         crate::config::LOCAL_L2_RPC_URL
     );
     let l2 = L2Client::local()?;
-    let block_number = l2
-        .probe()
-        .await
-        .context("local L2 RPC check failed")?;
+    let block_number = l2.probe().await.context("local L2 RPC check failed")?;
     info!("local L2 reachable, head block = {block_number}");
 
     if persistence::bootstrap_exists(config.home.as_deref())? {

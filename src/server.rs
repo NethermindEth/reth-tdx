@@ -16,7 +16,9 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{error, info};
 
 use crate::{
-    Config, ServeOpts, aggregation, bootstrap as bootstrap_module, l2_client::L2Client, proposal,
+    Config, ServeOpts, aggregation, bootstrap as bootstrap_module,
+    l2_client::L2Client,
+    proposal,
     protocol::{
         BootstrapResponse, ProofError, ProofResponse, ProofResult, ProofStatus,
         RETH_TDX_PROOF_RESPONSE_SCHEMA, RETH_TDX_SHASTA_AGGREGATE_REQUEST_SCHEMA,
@@ -24,9 +26,11 @@ use crate::{
     },
 };
 
-/// Maximum accepted request body. Aggregation batches with many sub-proofs
-/// can grow, but reth-tdx's payload is L1-only fields so this is generous.
-const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum accepted request body. A proposal request carries only a handful
+/// of L1 scalar fields (well under 1 KB); the worst case is an aggregation
+/// batch (~750 bytes per sub-proof × N + JSON framing). 1 MiB gives ~1000
+/// sub-proofs of headroom while keeping the memory ceiling per-request bounded.
+const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 
 /// Shared state passed to every handler.
 #[derive(Clone)]
@@ -62,7 +66,9 @@ pub async fn run(config: Config, opts: ServeOpts, l2: L2Client) -> Result<()> {
         .with_context(|| format!("failed to bind {}", opts.bind))?;
     info!("reth-tdx HTTP server listening on {}", opts.bind);
 
-    axum::serve(listener, app).await.context("axum server error")
+    axum::serve(listener, app)
+        .await
+        .context("axum server error")
 }
 
 // ─────────────────────────── Handlers ───────────────────────────
@@ -90,7 +96,10 @@ async fn prove_shasta(
         return error_response(
             StatusCode::BAD_REQUEST,
             "unsupported_schema",
-            format!("expected {RETH_TDX_SHASTA_REQUEST_SCHEMA}, got {}", request.schema),
+            format!(
+                "expected {RETH_TDX_SHASTA_REQUEST_SCHEMA}, got {}",
+                request.schema
+            ),
         );
     }
 
