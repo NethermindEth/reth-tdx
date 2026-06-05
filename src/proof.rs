@@ -1,10 +1,7 @@
 //! TDX proof construction and attestation quote generation.
 //!
-//! [`TdxProof`] is the 89-byte canonical wire format
-//! (`instance_id(4) || address(20) || signature(65)`) for both proposal and
-//! aggregation proofs. It matches the legacy `SgxVerifier` ABI byte-for-byte so
-//! TDX proofs slot into any `ComposeVerifier` configuration that already
-//! accepts the SGX-style proof shape.
+//! [`TdxProof`] is the 85-byte canonical wire format
+//! (`address(20) || signature(65)`) for both proposal and aggregation proofs.
 
 use alloy_primitives::{Address, B256};
 use anyhow::{Result, anyhow};
@@ -16,12 +13,12 @@ use crate::{
     signature::{address_from_private_key, recover_signer, sign_message},
 };
 
-/// Wire size: `instance_id(4) || address(20) || signature(65)`.
-pub const TDX_PROOF_SIZE: usize = 89;
+/// Wire size: `address(20) || signature(65)`.
+pub const TDX_PROOF_SIZE: usize = 85;
 
 // ─────────────────────────── Proof structure ───────────────────────────
 
-/// A single TDX proof (89 bytes).
+/// A single TDX proof (85 bytes).
 #[derive(Debug)]
 pub struct TdxProof {
     data: [u8; TDX_PROOF_SIZE],
@@ -30,11 +27,10 @@ pub struct TdxProof {
 impl TdxProof {
     /// Build a new proof from its components.
     #[must_use]
-    pub fn new(instance_id: u32, public_key: &Address, signature: &[u8; 65]) -> Self {
+    pub fn new(public_key: &Address, signature: &[u8; 65]) -> Self {
         let mut data = [0u8; TDX_PROOF_SIZE];
-        data[0..4].copy_from_slice(&instance_id.to_be_bytes());
-        data[4..24].copy_from_slice(public_key.as_slice());
-        data[24..89].copy_from_slice(signature);
+        data[0..20].copy_from_slice(public_key.as_slice());
+        data[20..85].copy_from_slice(signature);
         Self { data }
     }
 
@@ -56,23 +52,16 @@ impl TdxProof {
         Ok(Self { data })
     }
 
-    /// Extract the `instance_id` field (bytes 0..4, big-endian).
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn instance_id(&self) -> u32 {
-        u32::from_be_bytes(self.data[0..4].try_into().unwrap())
-    }
-
-    /// Extract the prover address (bytes 4..24).
+    /// Extract the prover address (bytes 0..20).
     #[must_use]
     pub fn public_key(&self) -> Address {
-        Address::from_slice(&self.data[4..24])
+        Address::from_slice(&self.data[0..20])
     }
 
-    /// Extract the ECDSA signature (bytes 24..89).
+    /// Extract the ECDSA signature (bytes 20..85).
     #[must_use]
     pub fn signature(&self) -> [u8; 65] {
-        self.data[24..89].try_into().unwrap()
+        self.data[20..85].try_into().unwrap()
     }
 
     /// Consume and return the raw bytes.
@@ -133,7 +122,7 @@ pub async fn get_tdx_metadata(socket_path: &str) -> Result<attestation::Metadata
 
 /// Output of a single-proof generation.
 pub struct ProveData {
-    /// 89-byte proof.
+    /// 85-byte proof.
     pub proof: Vec<u8>,
     /// TDX attestation quote bound to the same signing hash.
     pub quote: Vec<u8>,
@@ -141,7 +130,7 @@ pub struct ProveData {
 
 /// Generate a TDX proof for the given signing hash.
 ///
-/// Signs the hash with the supplied private key, builds the 89-byte proof, and
+/// Signs the hash with the supplied private key, builds the 85-byte proof, and
 /// produces a TDX attestation quote bound to the same hash.
 ///
 /// # Errors
@@ -149,14 +138,13 @@ pub struct ProveData {
 /// Returns an error if signing fails or the attestation service is unreachable.
 pub async fn prove(
     socket_path: &str,
-    instance_id: u32,
     private_key: &secp256k1::SecretKey,
     instance_hash: B256,
 ) -> Result<ProveData> {
     let address = address_from_private_key(private_key);
 
     let signature = sign_message(private_key, &instance_hash)?;
-    let proof = TdxProof::new(instance_id, &address, &signature).into_vec();
+    let proof = TdxProof::new(&address, &signature).into_vec();
     let (quote, _nonce) = generate_tdx_quote(socket_path, &instance_hash).await?;
 
     Ok(ProveData { proof, quote })
@@ -166,7 +154,7 @@ pub async fn prove(
 
 /// Output of an aggregation proof generation.
 pub struct ProveAggregationData {
-    /// 89-byte aggregation proof.
+    /// 85-byte aggregation proof.
     pub proof: Vec<u8>,
     /// TDX attestation quote bound to the aggregation hash.
     pub quote: Vec<u8>,
@@ -186,7 +174,6 @@ pub struct ProveAggregationData {
 /// is unreachable.
 pub async fn prove_shasta_aggregation(
     socket_path: &str,
-    instance_id: u32,
     private_key: &secp256k1::SecretKey,
     sub_proofs: &[(Vec<u8>, B256)],
     aggregation_hash: B256,
@@ -205,7 +192,7 @@ pub async fn prove_shasta_aggregation(
     }
 
     let signature = sign_message(private_key, &aggregation_hash)?;
-    let proof = TdxProof::new(instance_id, &new_instance, &signature).into_vec();
+    let proof = TdxProof::new(&new_instance, &signature).into_vec();
     let (quote, _nonce) = generate_tdx_quote(socket_path, &aggregation_hash).await?;
 
     Ok(ProveAggregationData {
@@ -261,12 +248,11 @@ mod tests {
 
     fn signed_proof(
         secret: &secp256k1::SecretKey,
-        instance_id: u32,
         input_hash: B256,
     ) -> (Vec<u8>, B256) {
         let address = address_from_private_key(secret);
         let signature = sign_message(secret, &input_hash).expect("sign");
-        let proof = TdxProof::new(instance_id, &address, &signature).into_vec();
+        let proof = TdxProof::new(&address, &signature).into_vec();
         (proof, input_hash)
     }
 
@@ -286,11 +272,10 @@ mod tests {
     fn proof_round_trip_preserves_fields() {
         let address = Address::repeat_byte(0xab);
         let signature = [0x42u8; 65];
-        let proof = TdxProof::new(7, &address, &signature);
+        let proof = TdxProof::new(&address, &signature);
         let bytes = proof.into_vec();
         let parsed = TdxProof::from_bytes(&bytes).expect("parse");
 
-        assert_eq!(parsed.instance_id(), 7);
         assert_eq!(parsed.public_key(), address);
         assert_eq!(parsed.signature(), signature);
     }
@@ -308,8 +293,8 @@ mod tests {
         let expected = address_from_private_key(&secret);
 
         let sub_proofs = vec![
-            signed_proof(&secret, 1, B256::repeat_byte(0x11)),
-            signed_proof(&secret, 1, B256::repeat_byte(0x22)),
+            signed_proof(&secret, B256::repeat_byte(0x11)),
+            signed_proof(&secret, B256::repeat_byte(0x22)),
         ];
 
         let instance = verify_sub_proofs(&sub_proofs).expect("verify");
@@ -323,8 +308,8 @@ mod tests {
         let (secret_b, _) = secp.generate_keypair(&mut rand::thread_rng());
 
         let sub_proofs = vec![
-            signed_proof(&secret_a, 1, B256::repeat_byte(0x11)),
-            signed_proof(&secret_b, 1, B256::repeat_byte(0x22)),
+            signed_proof(&secret_a, B256::repeat_byte(0x11)),
+            signed_proof(&secret_b, B256::repeat_byte(0x22)),
         ];
 
         let err = verify_sub_proofs(&sub_proofs).expect_err("rotation");
@@ -339,7 +324,7 @@ mod tests {
         let secp = Secp256k1::new();
         let (secret, _) = secp.generate_keypair(&mut rand::thread_rng());
 
-        let (proof_bytes, _) = signed_proof(&secret, 1, B256::repeat_byte(0x11));
+        let (proof_bytes, _) = signed_proof(&secret, B256::repeat_byte(0x11));
         let sub_proofs = vec![(proof_bytes, B256::repeat_byte(0x22))];
 
         let err = verify_sub_proofs(&sub_proofs).expect_err("bad sig");

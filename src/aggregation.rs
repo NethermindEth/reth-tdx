@@ -131,7 +131,6 @@ pub async fn sign_aggregation(
         aggregation_hash,
     } = prove_shasta_aggregation(
         &config.tdxs_socket,
-        config.instance_id,
         &private_key,
         &sub_proof_pairs,
         aggregation_hash,

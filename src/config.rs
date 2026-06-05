@@ -31,12 +31,6 @@ pub struct Config {
     #[arg(long, env = "RETH_TDX_HOME")]
     pub home: Option<String>,
 
-    /// On-chain verifier instance ID (4-byte big-endian field of the 89-byte
-    /// proof wire format). Matches the legacy SGX prover's instance id slot so
-    /// the same `SgxVerifier` ABI accepts TDX proofs.
-    #[arg(long, env = "RETH_TDX_INSTANCE_ID", default_value_t = 0)]
-    pub instance_id: u32,
-
     /// L2 chain id (Taiko). Bound into the signed `shasta_aggregation_output`.
     #[arg(long, env = "RETH_TDX_L2_CHAIN_ID")]
     pub l2_chain_id: u64,

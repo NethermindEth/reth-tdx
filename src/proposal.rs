@@ -132,7 +132,6 @@ pub async fn sign_proposal(
 
     let ProveData { proof, quote } = prove(
         &config.tdxs_socket,
-        config.instance_id,
         &private_key,
         signing_hash,
     )
